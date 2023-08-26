@@ -1,33 +1,249 @@
 ---
-title: "Clean And Transform Dutch Horse Racing Data from ndr.nl"
-output: html_notebook
+title: "Cleaning And Transforming Dutch Horse Racing Data from ndr.nl"
+output: github_document
 ---
 
 
+#### Set directory of this notebook as working directory
+
 ```{r}
 setwd(dirname(rstudioapi::getSourceEditorContext()$path))
-getwd()
 ```
 
-Load Data
+
+# Load packages
+
+```{r warning=FALSE}
+library(tidyverse)
+```
+
+
+
+# Load Data
 
 ```{r}
-
+csv_paths <- list.files("./data_wo_header", full.names = TRUE)
+results_csvs <- lapply(
+  csv_paths, read.csv, header = FALSE, encoding = "utf-8", 
+  colClasses = c("integer", rep("character", 20))
+)
+races_nl <- bind_rows(results_csvs)
+c_names <- c(
+  "ndr_id", "date_track", "time", "race_number", "title", 
+  "description1", "description2", "description3", "race_infos",
+  "position", "horse", "driver", "distance", "startnummer", "startnr", "draw", 
+  "red_km_str", "dist_btn", "Hcap", "prize_money", "odds"
+)
+colnames(races_nl) <- c_names
 ```
 
 
+# Columns
+
+Column descriptions:
+
+* ndr_id: an ID which is used by ndr.nl internally to identify the horse racing
+events
+
+* date_track: Date and racecourse on which the race took place
+
+* time: Time of day at which the race took place
+
+* race_number
+
+* title
+
+* description1
+
+* description2
+
+* description3
+
+* race_infos
+
+* position
+
+* horse: Name of the horse
+
+* driver: Name of the driver (or jockey for flat races)
+
+* distance
+
+* startnummer and startnr: two different column names used by ndr.nl. Both have the same meaning 
+
+* draw: Only used in flat races to indicate the stall number of the starting gate for the horse in this race.
+
+* red_km_str: [Réduction kilométrique](https://www.zone-turf.fr/definition/reduction-kilometrique-99.html) as a string which is just the average pace per km of the horse in this race. The string looks like this for example: '1.15,6' (so the length of this string should normally be 6 characters) 
+
+* dist_btn
+
+* Hcap
+
+* prize_money
+* odds
 
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+# Columns
 
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+## "ndr_id"
+
+We can just leave that one alone.
+
+
+## "race_infos" and new column discipline
+
+We are only interested in the harness racing results. So the first thing we could do is filter for the discipline "Drafsport".
 
 ```{r}
-plot(cars)
+# Adding new column "discipline"
+races_nl <- races_nl %>% 
+  mutate(discipline = gsub(" -.*", "", race_infos))
+unique(races_nl$discipline)
+```
+```{r}
+races_nl <- races_nl %>% 
+  filter(discipline == "Drafsport")
 ```
 
-Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
 
-When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+## "date_track"
 
-The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+The date_track column contains two types of information and we should separate them. Before that we should check that all values for "date_track" follow the same pattern.
+
+```{r}
+date_track_na <- races_nl %>% 
+  filter(!grepl("\\d{2}-\\d{2}-\\d{2}, .*$", date_track))
+```
+
+
+```{r}
+races_nl <- races_nl %>% 
+  separate(col = date_track, into = c("date", "racecourse"), sep = ", ")
+```
+
+```{r}
+unique(races_nl$racecourse)
+```
+
+## "race_number"
+
+```{r}
+unique(races_nl$race_number)
+```
+
+Those are some crazy numbers. I have never been to the races and have watched a 21st race on that day. Actually those are codes for canceled races.
+
+
+## Dropping columns used for flat racing results
+
+After a glimpse at the data we can safely assume that "description2" and "description3" are only used for flat racing results.
+
+```{r}
+races_nl %>% 
+  summarise(
+    #vars("description1", "description2", "description3"), mean(str_length)
+    mean_strlen_desc1 = mean(str_length(description1)),
+    mean_strlen_desc2 = mean(str_length(description2)),
+    mean_strlen_desc3 = mean(str_length(description3))
+  )
+```
+
+```{r}
+races_nl <- races_nl %>% 
+  select(ndr_id:description1, race_infos:startnr, red_km_str, prize_money, odds)
+```
+
+
+## "prize_money"
+
+We think that the right way to store currency values in an R data frame is as an integer and in our case  Euro-Cents. At first we should check if there are values for prize money which don't follow the two expected patterns: "" (empty string) and "€ .*"
+
+```{r}
+races_nl %>% 
+  filter(!grepl("^€ .*$|^$", prize_money)) %>% 
+  select(ndr_id, race_number, horse, prize_money)
+```
+
+So for 11 rows the expected patterns in "prize_money" don't show up. After checking what went wrong it has been found out that in these cases there have been problems with the tables on the ndr.nl website and we can simply eliminate the rows. These are just parts of the flat racing results. Before we eliminate them we can just build our new column "prize_eurcents". There should be NAs introduced to our new column in the defective rows.   
+
+```{r}
+races_nl <- races_nl %>% 
+  mutate(
+    # replace empty strings with "0"
+    prize_eurcents = if_else(prize_money == "", "0", prize_money),
+    # convert to euro cents
+    prize_eurcents = as.integer(gsub("€ |\\.|,", "", prize_eurcents))
+  )
+```
+
+```{r}
+sum(is.na(races_nl$prize_eurcents))
+```
+
+```{r}
+races_nl <- races_nl %>% 
+  filter(!is.na(prize_eurcents))
+```
+
+
+
+
+```{r}
+#sort(unique(races_nl$prize_money))
+```
+
+
+
+
+## Inspecting the column 'red_km_str'
+
+Since the length of the string should be 6 and follow the pattern described above, we are also interested in strings of length 6 which do not match the pattern
+
+```{r}
+races_nl %>% 
+  filter(
+    !grepl("^\\d\\.\\d{2},\\d$", red_km_str) & str_length(red_km_str) == 6
+  ) %>% 
+  arrange(red_km_str) %>% 
+  .$red_km_str
+```
+
+
+
+```{r}
+# red_km_str_not6 <- races_nl %>% 
+#   filter(str_length(red_km_str) != 6)
+# red_km_str_equal6 <- races_nl %>% 
+#   filter(str_length(red_km_str) == 6)
+```
+
+
+
+Add columns
+
+```{r}
+# races_nl <- races_nl %>% 
+#   mutate(
+#     bahn = gsub("^.*, ", "", date_track),
+#     disziplin = gsub(" -.*", "", race_infos),
+#     quote = as.numeric(gsub(",", ".", odds)),
+#     datum = as.Date(gsub(", .*", "", date_track), format = "%d-%m-%y"),
+#     red_km_sec = as.numeric(gsub("\\..*", "", red_km_str)) * 60 +
+#       as.numeric(gsub(",", ".", gsub("^.\\.", "", red_km_str)))
+#   )
+```
+
+
+```{r}
+# red_km_sec_na <- races_nl %>% 
+#   filter(is.na(red_km_sec))
+```
+
+
+
+```{r}
+# summary(races_nl)
+```
+
+
