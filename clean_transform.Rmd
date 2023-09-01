@@ -11,23 +11,24 @@ setwd(dirname(rstudioapi::getSourceEditorContext()$path))
 ```
 
 
-# Load packages
+# 1 Load packages and Data
 
 ```{r warning=FALSE}
 library(tidyverse)
 ```
 
 
-
-# Load Data
-
 ```{r}
-csv_paths <- list.files("./data_wo_header", full.names = TRUE)
+csv_paths <- list.files("./data", full.names = TRUE)
 results_csvs <- lapply(
-  csv_paths, read.csv, header = FALSE, encoding = "utf-8", 
+  csv_paths, read.csv, header = TRUE, encoding = "utf-8", 
   colClasses = c("integer", rep("character", 20))
 )
 races_nl <- bind_rows(results_csvs)
+```
+
+```{r}
+# give columns new names
 c_names <- c(
   "ndr_id", "date_track", "time", "race_number", "title", 
   "description1", "description2", "description3", "race_infos",
@@ -38,60 +39,56 @@ colnames(races_nl) <- c_names
 ```
 
 
-# Columns
+# 2 Columns
 
 Column descriptions:
 
-* ndr_id: an ID which is used by ndr.nl internally to identify the horse racing
-events
+* ndr_id: An ID which is used by ndr.nl internally to identify the individual horse racing events (race days).
 
-* date_track: Date and racecourse on which the race took place
+* date_track: Date of the race and racecourse on which the race took place.
 
-* time: Time of day at which the race took place
+* time: Time of day at which the race took place.
 
-* race_number
+* race_number: The races are numbered but there are also races without numbers which are qualifiers.
 
-* title
+* title: Title of the race.
 
-* description1
+* description1: Description of the conditions under which the race took place.
 
-* description2
+* description2 and description3: Used in the description of the conditions of flat races.
 
-* description3
+* race_infos: Infos about discipline of the race, distance to run, and type of start.
 
-* race_infos
+* position: Finishing position of the horse in the race.
 
-* position
+* horse: Name of the horse.
 
-* horse: Name of the horse
+* driver: Name of the driver (or jockey for flat races).
 
-* driver: Name of the driver (or jockey for flat races)
+* distance: Distance to be run by the specific horse. It can differ from the distance of the race (better horses sometimes have to run a slightly longer distance in Bandenstart-races)
 
-* distance
-
-* startnummer and startnr: two different column names used by ndr.nl. Both have the same meaning 
+* startnummer and startnr: Two different column names used by ndr.nl. Both have the same meaning (bib number of the horse). 
 
 * draw: Only used in flat races to indicate the stall number of the starting gate for the horse in this race.
 
 * red_km_str: [Réduction kilométrique](https://www.zone-turf.fr/definition/reduction-kilometrique-99.html) as a string which is just the average pace per km of the horse in this race. The string looks like this for example: '1.15,6' (so the length of this string should normally be 6 characters) 
 
-* dist_btn
+* dist_btn: Distance to the winning horse at finish measured in horse lengths (only used in flat races).
 
-* Hcap
+* Hcap: Weight carried or Handicap rating of the horse (since it is only used in flat races and I am interested in harness races I have not looked into the real meaning of this number in the context of dutch horse races).
 
-* prize_money
-* odds
+* prize_money: Money won by the horse in the race.
 
-
-# Columns
+* odds: Odds (used for betting purposes). 
 
 
-## "ndr_id"
+
+## 2.1 "ndr_id"
 
 We can just leave that one alone.
 
 
-## "race_infos" and new column discipline
+## 2.2 "race_infos" and new column discipline
 
 We are only interested in the harness racing results. So the first thing we could do is filter for the discipline "Drafsport".
 
@@ -100,19 +97,17 @@ We are only interested in the harness racing results. So the first thing we coul
 races_nl <- races_nl %>% 
   mutate(discipline = gsub(" -.*", "", race_infos))
 unique(races_nl$discipline)
-```
-```{r}
 races_nl <- races_nl %>% 
   filter(discipline == "Drafsport")
 ```
 
 
-## "date_track"
+## 2.3 "date_track"
 
 The date_track column contains two types of information and we should separate them. Before that we should check that all values for "date_track" follow the same pattern.
 
 ```{r}
-date_track_na <- races_nl %>% 
+races_nl %>% 
   filter(!grepl("\\d{2}-\\d{2}-\\d{2}, .*$", date_track))
 ```
 
@@ -120,22 +115,34 @@ date_track_na <- races_nl %>%
 ```{r}
 races_nl <- races_nl %>% 
   separate(col = date_track, into = c("date", "racecourse"), sep = ", ")
-```
-
-```{r}
 unique(races_nl$racecourse)
 ```
 
-## "race_number"
+## 2.4 "race_number"
 
 ```{r}
-unique(races_nl$race_number)
+sort(unique(races_nl$race_number))
 ```
 
 Those are some crazy numbers. I have never been to the races and have watched a 21st race on that day. Actually those are codes for canceled races.
 
+```{r}
+crazy_rnumbers <- c("0", as.character(20:29))
+races_nl %>% 
+  filter(race_number %in% crazy_rnumbers) %>% 
+  distinct(title)
+```
+So we could safely get rid of the canceled races.
 
-## Dropping columns used for flat racing results
+```{r}
+races_nl <- races_nl %>% 
+  filter(! race_number %in% crazy_rnumbers)
+```
+
+
+
+
+## 2.5 Dropping columns used for flat racing results
 
 After a glimpse at the data we can safely assume that "description2" and "description3" are only used for flat racing results.
 
@@ -149,15 +156,17 @@ races_nl %>%
   )
 ```
 
+Others columns only used for flat racing results: draw, dist_btn, Hcap. Drop columns for flat racing altogether 
+
 ```{r}
 races_nl <- races_nl %>% 
   select(ndr_id:description1, race_infos:startnr, red_km_str, prize_money, odds)
 ```
 
 
-## "prize_money"
+## 2.6 "prize_money"
 
-We think that the right way to store currency values in an R data frame is as an integer and in our case  Euro-Cents. At first we should check if there are values for prize money which don't follow the two expected patterns: "" (empty string) and "€ .*"
+We are going to store currency values in the data frame as an integer and in our case  Euro-Cents. At first we could check if there are values for prize money which don't follow the two expected patterns: "" (empty string) and "€ .*"
 
 ```{r}
 races_nl %>% 
@@ -165,7 +174,10 @@ races_nl %>%
   select(ndr_id, race_number, horse, prize_money)
 ```
 
-So for 11 rows the expected patterns in "prize_money" don't show up. After checking what went wrong it has been found out that in these cases there have been problems with the tables on the ndr.nl website and we can simply eliminate the rows. These are just parts of the flat racing results. Before we eliminate them we can just build our new column "prize_eurcents". There should be NAs introduced to our new column in the defective rows.   
+
+
+
+Build new column "prize_eurcents".    
 
 ```{r}
 races_nl <- races_nl %>% 
@@ -177,28 +189,137 @@ races_nl <- races_nl %>%
   )
 ```
 
+
+
+## 2.7 "startnummer" and "startnr"
+
+In both of these columns we would expect numbers and only numbers.
+
 ```{r}
-sum(is.na(races_nl$prize_eurcents))
+sort(unique(races_nl$startnummer))
 ```
+
+
+Do the same for the "startnr"-column:
+
+```{r}
+sort(unique(races_nl$startnr))
+```
+
+There are two funny looking values in this field: "A" and "1o"
+
+```{r}
+races_nl %>% 
+  filter(startnr %in% c("A", "1o")) %>% 
+  select(ndr_id, race_number, horse, position, startnr, title)
+```
+
+The meaning of the "A" is unknown and we should treat it as NA. The "1o" should obviously mean "10", so we could just replace it.  
+
+```{r}
+races_nl$startnr <- ifelse(
+  races_nl$ndr_id == 14672 & races_nl$race_number == "2" & 
+    races_nl$horse == "Letty Victory",
+  "10",
+  races_nl$startnr
+)
+```
+
+The "startnummer" and "startnr" have the same meaning obviously. 
+
+```{r}
+races_nl %>% 
+  filter(str_length(startnummer) > 0 & str_length(startnr) > 0)
+```
+
+New column for starting number: start_no
 
 ```{r}
 races_nl <- races_nl %>% 
-  filter(!is.na(prize_eurcents))
+  mutate(start_no = as.integer(paste0(startnummer, startnr)))
 ```
 
-
+```{r}
+races_nl %>% 
+  filter(
+    str_length(startnummer) > 0 | str_length(startnr) > 0, is.na(start_no)
+  ) %>% 
+  select(ndr_id, race_number, horse, startnummer, startnr, start_no)
+```
 
 
 ```{r}
-#sort(unique(races_nl$prize_money))
+races_nl <- races_nl %>% 
+  select(-c(startnummer, startnr))
+```
+
+
+## 2.8 "odds"
+
+Since the Netherlands are in Europe they use commas as decimal separators. Expected patterns in the odds column are e.g. numbers like "7,4" or "5" and empty string.
+
+```{r}
+races_nl %>% 
+  filter(!grepl("^\\d+,\\d+$|^\\d+$|^$", odds)) %>% 
+  select(ndr_id, race_number, horse, odds)
+```
+
+In the above case perhaps something went wrong with the data entry of ndr.nl. We should treat those as NA and later filter out these races when we need the odds for an analysis. 
+
+```{r}
+races_nl$odds <- ifelse(
+  grepl("^,\\d", races_nl$odds), NA, races_nl$odds 
+)
+```
+
+```{r}
+sum(is.na(races_nl$odds))
+```
+
+Number of empty strings:
+```{r}
+sum(grepl("^$", races_nl$odds))
+```
+
+```{r}
+races_nl$odds <- as.numeric(gsub(",", "\\.", races_nl$odds))
+```
+
+
+```{r}
+sum(is.na(races_nl$odds))
+```
+
+```{r}
+summary(races_nl$odds)
+```
+
+```{r}
+ggplot(races_nl, aes(x = odds)) +
+  geom_histogram()
+```
+
+There are several rows which have an odds value below 1. Odds below 1 don't make sense in horse racing and you would never encounter them.
+
+```{r}
+races_nl %>% 
+  arrange(odds) %>% 
+  filter(odds < 1) %>% 
+  .$odds %>% 
+  unique()
+```
+We should set those to NA. Odds of 1 do make sense if a very large amount of money has been bet on this horse. In France odds of 1 would actually not be possible because the minimum set by PMU is 1.1. So we shouldn't encounter odds of 1 in the PMU races at Wolvega.
+The highest possible value for odds in our dataset is 99.9. But those odds could very well be higher. Traditionally the toteboards did not display three digits before the decimal separator. But for now we shouldn't change the values of those high odds because we do not know the exact values and could only guess them in combination with the odds of the other horses in the race.
+
+```{r}
+races_nl$odds <- ifelse(races_nl$odds == 0, NA, races_nl$odds)
 ```
 
 
 
+## 2.9 Inspecting the column 'red_km_str'
 
-## Inspecting the column 'red_km_str'
-
-Since the length of the string should be 6 and follow the pattern described above, we are also interested in strings of length 6 which do not match the pattern
+Since the length of the string should be 6 and should follow the pattern described above, we are also interested in strings of length 6 which do not match the pattern
 
 ```{r}
 races_nl %>% 
@@ -208,42 +329,126 @@ races_nl %>%
   arrange(red_km_str) %>% 
   .$red_km_str
 ```
+In these cases something went wrong with the data entry at ndr.nl and we can just transform those values into the expected format.
 
+Substitute comma with dot in "1,20.9":
+
+```{r}
+races_nl$red_km_str <- ifelse(
+  (!grepl("^\\d\\.\\d{2},\\d$", races_nl$red_km_str) & 
+     str_length(races_nl$red_km_str) == 6) & grepl("\\d,", races_nl$red_km_str),
+  gsub(",", "\\.", races_nl$red_km_str),
+  races_nl$red_km_str
+)
+```
+
+Substitute second dot with comma in the above cases:
+
+```{r}
+races_nl$red_km_str <- ifelse(
+  !grepl("^\\d\\.\\d{2},\\d$", races_nl$red_km_str) & str_length(races_nl$red_km_str) == 6,
+  gsub(
+    "\\.(?=\\d$)", ",", races_nl$red_km_str, perl = TRUE
+  ),
+  races_nl$red_km_str
+)
+```
+
+
+## 2.10 Adding column "red_km_sec"
+
+```{r}
+races_nl %>% 
+  filter(str_length(red_km_str) < 6, str_length(red_km_str) > 0) %>% 
+  select(ndr_id, race_number, horse, red_km_str)
+```
+
+```{r}
+races_nl %>% 
+  filter(ndr_id == 64035, race_number == "1") %>% 
+  select(race_number,position, horse, red_km_str)
+```
 
 
 ```{r}
-# red_km_str_not6 <- races_nl %>% 
-#   filter(str_length(red_km_str) != 6)
-# red_km_str_equal6 <- races_nl %>% 
-#   filter(str_length(red_km_str) == 6)
+races_nl %>% 
+  filter(str_length(red_km_str) < 6, str_length(red_km_str) > 0) %>% 
+  select(ndr_id, race_number, horse, red_km_str) %>% 
+  .$red_km_str
+```
+
+
+```{r}
+races_nl %>% 
+  filter(ndr_id == 4925, race_number == 11) %>% 
+  select(ndr_id, race_number, position, horse, red_km_str)
+```
+
+The "1.18" should probably be a be a "1.18,8" or a "1.18,9". We could just let it go to NA or drop the race entirely. It is a result from 17/08/1997 and we don't really need the result for later stages of the analysis because it is really old.
+
+```{r}
+races_nl$red_km_str <- ifelse(
+  races_nl$ndr_id == 4925 & races_nl$race_number == "11" & 
+    races_nl$position == "3",
+  NA,
+  races_nl$red_km_str
+)
+```
+
+
+I don't know what "GT" or "gto" actually means. But I presume that times have not been taken in this cases and we could just declare it NA.
+
+```{r}
+races_nl$red_km_str <- ifelse(
+  races_nl$red_km_str == "gto" | races_nl$red_km_str == "GT",
+  NA,
+  races_nl$red_km_str
+)
+```
+
+```{r}
+sum(is.na(races_nl$red_km_str))
 ```
 
 
 
-Add columns
+Adding a new column with the pace (réduction kilométrique) measured in seconds would be a good idea.
 
 ```{r}
-# races_nl <- races_nl %>% 
-#   mutate(
-#     bahn = gsub("^.*, ", "", date_track),
-#     disziplin = gsub(" -.*", "", race_infos),
-#     quote = as.numeric(gsub(",", ".", odds)),
-#     datum = as.Date(gsub(", .*", "", date_track), format = "%d-%m-%y"),
-#     red_km_sec = as.numeric(gsub("\\..*", "", red_km_str)) * 60 +
-#       as.numeric(gsub(",", ".", gsub("^.\\.", "", red_km_str)))
-#   )
+races_nl <- races_nl %>% 
+  mutate(
+    red_km_sec = as.numeric(gsub("\\..*", "", red_km_str)) * 60 +
+      as.numeric(gsub(",", ".", gsub("^.\\.", "", red_km_str))) 
+  )
 ```
 
 
 ```{r}
-# red_km_sec_na <- races_nl %>% 
-#   filter(is.na(red_km_sec))
+races_nl %>% 
+  filter(is.na(red_km_sec)) %>% 
+  .$red_km_str %>% 
+  unique()
 ```
+
+
+
+# 3 Write Data to csv-File
+
 
 
 
 ```{r}
-# summary(races_nl)
+partants <- c(
+  "Narnia Renka", "Marillion", "Nikita Newport", "Nobel Steel", "MMacMcManaman",
+  "No Surrender", "Chelsea (CZ)", "E Lady Ris", "Love surprise"
+)
+race1 <- races_nl %>% 
+  filter(horse %in% partants)
 ```
+
+
+
+
+
 
 
