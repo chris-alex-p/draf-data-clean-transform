@@ -193,7 +193,7 @@ races_nl <- races_nl %>%
 
 ## 2.7 "startnummer" and "startnr"
 
-In both of these columns we would expect numbers and only numbers.
+In both of these columns we would expect numbers and only numbers (or empty string).
 
 ```{r}
 sort(unique(races_nl$startnummer))
@@ -430,6 +430,34 @@ races_nl %>%
   unique()
 ```
 
+```{r}
+ggplot(races_nl, aes(y = red_km_sec)) +
+  geom_boxplot()
+```
+
+Several 0s in red_km_sec column
+```{r}
+races_nl %>% 
+  filter(red_km_sec == 0) %>% 
+  select(ndr_id, race_number, horse, position, red_km_str, red_km_sec)
+```
+
+Transform 0s to NAs
+
+```{r}
+races_nl$red_km_sec <- ifelse(races_nl$red_km_sec == 0, NA, races_nl$red_km_sec)
+```
+
+
+Not so plausible values with under 40 sec/km pace:
+
+```{r}
+notplausible_redkm <- races_nl %>% 
+  filter(red_km_sec < 40) %>% 
+  select(ndr_id, race_number, horse, position, red_km_str, red_km_sec)
+```
+
+Have a look at those two races
 
 
 # 3 Write Data to csv-File
