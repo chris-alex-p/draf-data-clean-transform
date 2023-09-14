@@ -14,6 +14,7 @@ setwd(dirname(rstudioapi::getSourceEditorContext()$path))
 # 1 Load packages and Data
 
 ```{r warning=FALSE}
+library(lubridate)
 library(tidyverse)
 ```
 
@@ -88,18 +89,60 @@ Column descriptions:
 We can just leave that one alone.
 
 
-## 2.2 "race_infos" and new column discipline
+## 2.2 Split "race_infos" into three columns
+
+```{r}
+races_nl <- races_nl %>% 
+  separate(
+    col = race_infos, into = c("discipline", "race_distance", "start_type"), 
+    sep = " - "
+  )
+```
+
+
+## 2.2.1 discipline
 
 We are only interested in the harness racing results. So the first thing we could do is filter for the discipline "Drafsport".
 
 ```{r}
-# Adding new column "discipline"
-races_nl <- races_nl %>% 
-  mutate(discipline = gsub(" -.*", "", race_infos))
 unique(races_nl$discipline)
+```
+```{r}
 races_nl <- races_nl %>% 
   filter(discipline == "Drafsport")
 ```
+
+
+## 2.2.2 race_distance
+
+The race_distance is not the same as the distance for a horse in a race because of the recul (longer distance for horses with higher winnings) in Bandenstart-races.
+
+```{r}
+unique(races_nl$race_distance)
+```
+```{r}
+races_nl$race_distance <- as.numeric(races_nl$race_distance)
+
+summary(races_nl$race_distance)
+```
+
+A race_distance of 0 does not make sense so we should set those to NA.
+
+```{r}
+races_nl$race_distance <- ifelse(
+  races_nl$race_distance == 0, NA, races_nl$race_distance
+)
+```
+
+
+
+## 2.2.3 start_type
+
+```{r}
+unique(races_nl$start_type)
+```
+Everything as expected. There are only these two start types in dutch harness racing.
+
 
 
 ## 2.3 "date_track"
@@ -117,6 +160,14 @@ races_nl <- races_nl %>%
   separate(col = date_track, into = c("date", "racecourse"), sep = ", ")
 unique(races_nl$racecourse)
 ```
+
+Bring date into slightly different format:
+
+```{r}
+races_nl$date <- dmy(races_nl$date)
+```
+
+
 
 ## 2.4 "race_number"
 
@@ -160,7 +211,7 @@ Others columns only used for flat racing results: draw, dist_btn, Hcap. Drop col
 
 ```{r}
 races_nl <- races_nl %>% 
-  select(ndr_id:description1, race_infos:startnr, red_km_str, prize_money, odds)
+  select(ndr_id:description1, discipline:startnr, red_km_str, prize_money, odds)
 ```
 
 
@@ -252,6 +303,62 @@ races_nl %>%
 races_nl <- races_nl %>% 
   select(-c(startnummer, startnr))
 ```
+
+
+## 2.8 distance
+
+```{r}
+unique(races_nl$distance)
+```
+
+Empty strings in the distance column.
+
+```{r}
+races_nl %>% 
+  filter(! grepl("\\d+", distance)) %>% 
+  select(
+    ndr_id, date, race_number, race_distance, 
+    start_no, horse, distance, position
+  )
+```
+
+```{r}
+races_nl %>% 
+  filter(ndr_id == 8528, race_number == "9") %>% 
+  select(
+    ndr_id, date, race_number, race_distance, start_no, horse, 
+    distance, position, start_type
+  )
+```
+
+We can safely assume that horse 8 and 9 had to run 2120 meters.
+
+```{r}
+races_nl$distance <- ifelse(
+  races_nl$ndr_id == 8528 & races_nl$race_number == "9" & 
+    races_nl$start_no %in% c(8, 9),
+  2120,
+  races_nl$distance
+)
+```
+
+
+distance of 0
+
+```{r}
+races_nl %>% 
+  filter(distance == "0")
+```
+
+```{r}
+races_nl$distance <- ifelse(
+  races_nl$ndr_id == 14417 & races_nl$race_number == 1,
+  NA,
+  races_nl$distance
+)
+```
+
+
 
 
 ## 2.8 "odds"
@@ -455,24 +562,68 @@ Not so plausible values with under 40 sec/km pace:
 notplausible_redkm <- races_nl %>% 
   filter(red_km_sec < 40) %>% 
   select(ndr_id, race_number, horse, position, red_km_str, red_km_sec)
+notplausible_redkm
 ```
 
 Have a look at those two races
 
+```{r}
+# ndr_id 29254, race 8
+races_nl %>% 
+  filter(
+    ndr_id == notplausible_redkm$ndr_id[1], 
+    race_number == notplausible_redkm$race_number[1]
+  ) %>% 
+  select(ndr_id, date, race_number, horse, position, red_km_str, red_km_sec)
+```
+We cannot deduce the real red_km for Oke Cartouche in this race, so we should set it to NA. Although we could probably take the mean of position 4 and 6.
 
-# 3 Write Data to csv-File
-
-
+```{r}
+races_nl$red_km_sec <- ifelse(
+  races_nl$ndr_id == 29254 & races_nl$race_number == "8" & 
+    races_nl$position == "5",
+  NA,
+  races_nl$red_km_sec
+)
+```
 
 
 ```{r}
-partants <- c(
-  "Narnia Renka", "Marillion", "Nikita Newport", "Nobel Steel", "MMacMcManaman",
-  "No Surrender", "Chelsea (CZ)", "E Lady Ris", "Love surprise"
-)
-race1 <- races_nl %>% 
-  filter(horse %in% partants)
+# ndr_id 29256, race 4
+races_nl %>% 
+  filter(
+    ndr_id == notplausible_redkm$ndr_id[2], 
+    race_number == notplausible_redkm$race_number[2]
+  ) %>% 
+  select(ndr_id, date, race_number, horse, position, red_km_str, red_km_sec)
 ```
+
+Here we could also set red_km_sec to NA.
+
+```{r}
+races_nl$red_km_sec <- ifelse(
+  races_nl$ndr_id == 29256 & races_nl$race_number == "4" & 
+    races_nl$position == "3",
+  NA,
+  races_nl$red_km_sec
+)
+```
+
+
+
+
+
+
+# 3 Save Data Frame to RData File
+
+
+```{r}
+saveRDS(races_nl, file = "races_nl.rds")
+```
+
+
+
+
 
 
 
